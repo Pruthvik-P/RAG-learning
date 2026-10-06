@@ -1,0 +1,50 @@
+Chunking Strategies
+-------------------
+
+Chunking is the act of splitting long documents into smaller passages before
+embedding. Good chunks are self-contained: a reader (or a model) can understand
+them without seeing the rest of the document.
+
+Common strategies:
+
+1. Fixed-size chunking: split every N characters with some overlap. Simple and
+   predictable, but it can cut sentences in half.
+
+2. Recursive chunking: try to split on paragraph breaks first, then line
+   breaks, then sentences, then words. This preserves natural boundaries and is
+   the most widely used default.
+
+3. Sentence chunking: group complete sentences until a size budget is reached.
+   Chunks stay grammatical, which tends to produce cleaner embeddings.
+
+4. Semantic chunking: use embeddings to detect where the topic changes and cut
+   there. Highest quality, but slower and more complex.
+
+The overlap parameter controls how many characters neighbouring chunks share.
+Overlap helps when an important idea straddles a boundary: it will appear whole
+in at least one chunk. Typical overlap is 10 to 20 percent of the chunk size.
+
+Prompt Construction
+-------------------
+
+The prompt is where retrieval becomes generation. A typical RAG prompt has four
+parts:
+
+- A system instruction telling the model to answer only from the context and to
+  admit when it does not know.
+- The retrieved context, often numbered [1], [2], [3] so the answer can cite
+  sources.
+- The user's question.
+- A final instruction about the desired format of the answer.
+
+Grounding rules reduce hallucination: instruct the model to quote or cite the
+context, and to say "I don't know" when the answer is absent. Keeping the
+temperature low (around 0.0 to 0.3) makes answers more focused and factual.
+
+Evaluation
+----------
+
+Measure retrieval separately from generation. Retrieval metrics include hit
+rate, mean reciprocal rank, and context precision. Generation metrics include
+faithfulness (is every claim supported by the context?) and answer relevance.
+Tracking both tells you whether to improve your search or your prompt.

@@ -1,0 +1,20 @@
+# The core RAG pipeline in this repo runs with the Python STANDARD LIBRARY ONLY.
+# The packages below are OPTIONAL extras that unlock better quality.
+
+# --- Optional: real embeddings (much better than the offline "hashing" default)
+# sentence-transformers>=2.5.0
+# numpy>=1.24
+
+# --- Optional: load PDF documents
+# pypdf>=4.0.0
+
+# --- Optional: alternative LLM/embedding providers via OpenAI-compatible API
+# (DeepSeek is called with urllib, so `openai` is NOT required)
+# openai>=1.30.0
+
+# --- Optional: load environment variables from .env (built-in loader used by default)
+# python-dotenv>=1.0.0
+
+# --- Dev: testing / linting
+# pytest>=8.0.0
+# ruff>=0.4.0
