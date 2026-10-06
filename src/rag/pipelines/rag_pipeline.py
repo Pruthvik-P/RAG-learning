@@ -33,6 +33,8 @@ from typing import List, Optional
 from ..config import Settings, settings as default_settings
 from ..llms.base import BaseLLM
 from ..llms import get_llm
+from ..rerankers.base import BaseReranker
+from ..rerankers import get_reranker
 from ..retrievers.base import BaseRetriever
 from ..retrievers import get_retriever
 from ..vectorstores.base import BaseVectorStore, ScoredDocument
@@ -90,6 +92,7 @@ class RAGPipeline:
         vector_store: BaseVectorStore,
         llm: Optional[BaseLLM] = None,
         retriever: Optional[BaseRetriever] = None,
+        reranker: Optional[BaseReranker] = None,
         settings: Settings = default_settings,
     ):
         self.settings = settings
@@ -99,6 +102,10 @@ class RAGPipeline:
             mode=settings.retrieval_mode,
             lambda_mult=settings.mmr_lambda,
         )
+        # Reranking is off unless explicitly enabled or a reranker is supplied.
+        if reranker is None and settings.use_reranking:
+            reranker = get_reranker(settings.rerank_kind)
+        self.reranker = reranker
         self.llm = llm or get_llm(
             provider="deepseek",
             api_key=settings.deepseek_api_key,
@@ -130,9 +137,18 @@ class RAGPipeline:
     # The three steps
     # ------------------------------------------------------------------ #
     def retrieve(self, question: str, k: Optional[int] = None) -> List[ScoredDocument]:
-        """STEP 1: fetch the most relevant chunks for the question."""
+        """STEP 1: fetch the most relevant chunks for the question.
+
+        When a reranker is configured this becomes a two-stage retrieve-and-
+        rerank: pull a wider candidate pool, then let the reranker pick the best.
+        """
         top_k = k or self.settings.top_k
-        return self.retriever.retrieve(question, k=top_k)
+        if self.reranker is None:
+            return self.retriever.retrieve(question, k=top_k)
+
+        candidate_k = max(self.settings.rerank_candidates, top_k)
+        candidates = self.retriever.retrieve(question, k=candidate_k)
+        return self.reranker.rerank(question, candidates, k=top_k)
 
     def build_prompt(self, question: str, sources: List[ScoredDocument]) -> str:
         """STEP 2 (AUGMENT): format retrieved chunks into the prompt."""
