@@ -19,13 +19,26 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from rag.chunkers import FixedSizeChunker, RecursiveChunker, SentenceChunker
+from rag.chunkers import (
+    FixedSizeChunker,
+    RecursiveChunker,
+    SentenceChunker,
+    TokenChunker,
+    MarkdownHeaderChunker,
+)
 from rag.embeddings import HashingEmbedding
 from rag.loaders import Document, TextLoader, MarkdownLoader, DirectoryLoader
 from rag.llms import DummyLLM
 from rag.pipelines import IngestionPipeline, RAGPipeline
-from rag.retrievers import SimilarityRetriever, MMRRetriever
+from rag.rerankers import BaseReranker, LexicalReranker, get_reranker
+from rag.retrievers import (
+    SimilarityRetriever,
+    MMRRetriever,
+    KeywordRetriever,
+    HybridRetriever,
+)
 from rag.vectorstores import InMemoryVectorStore
+from rag import visualization
 
 SAMPLE_DIR = PROJECT_ROOT / "data" / "sample_docs"
 
@@ -87,6 +100,26 @@ class TestChunkers(unittest.TestCase):
     def test_overlap_must_be_smaller(self):
         with self.assertRaises(ValueError):
             FixedSizeChunker(chunk_size=100, chunk_overlap=100)
+
+    def test_token_chunker_counts_tokens(self):
+        text = " ".join(f"word{i}" for i in range(25))
+        chunks = TokenChunker(chunk_size=10, chunk_overlap=2).split_text(text)
+        # Each chunk must hold at most 10 whitespace tokens.
+        self.assertTrue(all(len(c.split()) <= 10 for c in chunks))
+        self.assertGreater(len(chunks), 1)
+
+    def test_markdown_header_chunker_adds_breadcrumb(self):
+        text = "# Title\n\n## Section A\nalpha beta\n\n## Section B\ngamma delta"
+        chunks = MarkdownHeaderChunker(chunk_size=500, chunk_overlap=50).split_text(text)
+        joined = "\n".join(chunks)
+        self.assertIn("Title > Section A", joined)
+        self.assertIn("Title > Section B", joined)
+
+    def test_markdown_header_splits_large_sections(self):
+        body = "\n".join("line " + str(i) for i in range(200))
+        text = f"# Title\n\n## Big\n{body}"
+        chunks = MarkdownHeaderChunker(chunk_size=200, chunk_overlap=20).split_text(text)
+        self.assertGreater(len(chunks), 1)
 
 
 class TestEmbeddings(unittest.TestCase):
@@ -156,6 +189,98 @@ class TestRetrievers(unittest.TestCase):
         results = MMRRetriever(self.store, lambda_mult=0.5).retrieve("topic", k=4)
         ids = [doc.id for doc, _ in results]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_keyword_finds_exact_term(self):
+        store = InMemoryVectorStore(HashingEmbedding(dimensions=512))
+        store.add_texts(
+            [
+                "Alpha document about cats and dogs.",
+                "Beta document about vector databases and BM25 scoring.",
+                "Gamma document about cooking pasta.",
+            ]
+        )
+        results = KeywordRetriever(store).retrieve("BM25 vector", k=1)
+        self.assertEqual(len(results), 1)
+        self.assertIn("BM25", results[0][0].page_content)
+
+    def test_hybrid_returns_unique_and_ranked(self):
+        results = HybridRetriever(self.store).retrieve("topic 4", k=4)
+        ids = [doc.id for doc, _ in results]
+        self.assertEqual(len(ids), len(set(ids)))
+        scores = [score for _, score in results]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+
+class TestRerankers(unittest.TestCase):
+    def _candidates(self):
+        relevant = Document(
+            page_content="Vector databases store embeddings for similarity search.",
+            metadata={"source": "a"},
+        )
+        irrelevant = Document(
+            page_content="The cat sat quietly on the warm mat.",
+            metadata={"source": "b"},
+        )
+        # Retriever wrongly ranked the irrelevant chunk first.
+        return [(irrelevant, 0.99), (relevant, 0.10)]
+
+    def test_lexical_reranker_promotes_relevant(self):
+        reranker = LexicalReranker(lexical_weight=0.9, original_weight=0.1)
+        results = reranker.rerank("vector database embeddings", self._candidates(), k=2)
+        self.assertIn("Vector databases", results[0][0].page_content)
+
+    def test_reranker_respects_k(self):
+        reranker = LexicalReranker()
+        results = reranker.rerank("vector", self._candidates(), k=1)
+        self.assertEqual(len(results), 1)
+
+    def test_reranker_empty(self):
+        self.assertEqual(LexicalReranker().rerank("q", []), [])
+
+    def test_factory(self):
+        self.assertIsInstance(get_reranker("lexical"), LexicalReranker)
+        self.assertIsInstance(get_reranker("lexical"), BaseReranker)
+
+
+class TestVisualization(unittest.TestCase):
+    def _document(self):
+        text = "# Title\n\n## Section A\n" + ("alpha beta gamma " * 40) + "\n## Section B\ndelta"
+        return Document(page_content=text, metadata={"source": "demo.md"})
+
+    def test_chunking_report_contains_marker(self):
+        document = self._document()
+        chunkers = {
+            "FixedSizeChunker": FixedSizeChunker(chunk_size=100, chunk_overlap=20),
+            "RecursiveChunker": RecursiveChunker(chunk_size=100, chunk_overlap=20),
+        }
+        report = visualization.render_chunking_report(document, chunkers, width=40)
+        self.assertIn("CHUNKING STRATEGIES", report)
+        self.assertIn("#", report)
+
+    def test_retrieval_visualizations(self):
+        store = InMemoryVectorStore(HashingEmbedding(dimensions=256))
+        store.add_texts(
+            [
+                "Vector databases store embeddings for similarity search.",
+                "Chunking splits documents into smaller passages.",
+                "The cat sat on the mat.",
+            ]
+        )
+        retrievers = {
+            "similarity": SimilarityRetriever(store),
+            "keyword": KeywordRetriever(store),
+        }
+        comparison = visualization.render_retriever_comparison(
+            "vector similarity", retrievers, k=2
+        )
+        self.assertIn("RETRIEVER COMPARISON", comparison)
+
+        results = retrievers["similarity"].retrieve("vector similarity", k=3)
+        self.assertIn("SimilarityRetriever", visualization.render_results("q", results, name="SimilarityRetriever"))
+
+        reranked = LexicalReranker().rerank("vector similarity", results, k=2)
+        diff = visualization.render_rerank("vector similarity", results, reranked)
+        self.assertIn("RERANK", diff)
 
 
 class TestPipelineEndToEnd(unittest.TestCase):

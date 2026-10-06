@@ -112,6 +112,17 @@ class Settings:
     retrieval_mode: str = os.environ.get("RAG_RETRIEVAL_MODE", "similarity")
     mmr_lambda: float = _env_float("RAG_MMR_LAMBDA", 0.5)  # 1.0=relevance, 0=diversity
 
+    # ------------------------ reranking -------------------- #
+    # Optional second pass that reorders the retrieved candidates.  The retriever
+    # fetches `rerank_candidates` chunks first, then the reranker keeps top_k.
+    use_reranking: bool = os.environ.get("RAG_USE_RERANKING", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    rerank_kind: str = os.environ.get("RAG_RERANK_KIND", "lexical")
+    rerank_candidates: int = _env_int("RAG_RERANK_CANDIDATES", 20)
+
     # ------------------------ DeepSeek LLM ----------------- #
     deepseek_api_key: Optional[str] = os.environ.get("DEEPSEEK_API_KEY")
     deepseek_base_url: str = os.environ.get(
